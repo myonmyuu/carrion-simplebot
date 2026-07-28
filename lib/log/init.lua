@@ -77,7 +77,12 @@ Logger = log
 local SpecLogger = setmetatable({
 	---@type string?
 	sawmill = nil
-}, { __index = Logger })
+}, {
+	__index = Logger;
+	__tostring = function (t)
+		return ("(speclogger logger (%s))"):format(t.sawmill)
+	end
+})
 
 function SpecLogger:debug(l, ...) 		Logger:debug(self.sawmill, l, ...) end
 function SpecLogger:error(l, ...) 		Logger:error(self.sawmill, l, ...) end

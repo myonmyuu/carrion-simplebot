@@ -45,7 +45,7 @@ end
 
 do
 	res_code, res_body, res_headers = carrion:request(
-		carrion.api.bots.designate,
+		carrion.Api.bots.designate,
 		{
 			headers = carrion:makeheaders(cookies);
 			data	= req_data;

@@ -5,22 +5,23 @@ function Helpers.tprint (tbl, height, indent)
 	if not tbl then return end
 	if not height then height = 0 end
 	if not indent then indent = 0 end
+	if indent > 10 then
+		return
+	end
 	if type(tbl) ~= "table" then
 		print(tbl)
 		return
 	end
 	for k, v in pairs(tbl) do
 		height = height+1
-		local formatting = string.rep("  ", indent) .. k .. ": "
+		local formatting = string.rep("  ", indent) .. tostring(k) .. ": "
 		if type(v) == "table" then
 			print(formatting, indent*8, 16*height)
 			Helpers.tprint(v, height+1, indent+1)
 		elseif type(v) == 'function' then
 			print(formatting .. "function", indent*8, 16*height)
-		elseif type(v) == 'boolean' then
-			print(formatting .. tostring(v), indent*8, 16*height)
 		else
-			print(formatting .. v, indent*8, 16*height)
+			print(formatting .. tostring(v), indent*8, 16*height)
 		end
 	end
 end
@@ -51,9 +52,50 @@ function table.removeItem(col, item)
     end
 end
 
+function table.removeall(t, n)
+	local succ = false
+	for k, value in pairs(t) do
+		if value == n then
+			succ = true
+			t[k] = nil
+		end
+	end
+	return succ
+end
+
 function table.clone(org)
 	return {unpack(org)}
 end
 
+local char_to_hex = function(c)
+	return string.format("%%%02X", string.byte(c))
+end
+
+function Helpers.urlencode(url)
+	if url == nil then
+		return
+	end
+	url = url:gsub("\n", "\r\n")
+	url = url:gsub("([^%w ])", char_to_hex)
+	url = url:gsub(" ", "%%20")
+	return url
+end
+
+local function hex_to_char(x)
+	return string.char(tonumber(x, 16))
+end
+
+function Helpers.urldecode(url)
+	if url == nil then
+		return
+	end
+	url = url:gsub("%%20", " ")
+	url = url:gsub("%%(%x%x)", hex_to_char)
+	return url
+end
+
+function Helpers.round(n)
+	return math.floor(n + 0.5)
+end
 
 return Helpers
