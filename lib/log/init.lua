@@ -1,16 +1,17 @@
 ---@class LogLevel
----@field name string
----@field level integer
+---@field name		string
+---@field level		integer
+---@field color	table
 
 ---@param name string
 ---@param l integer
----@param clr? string
+---@param clr? table
 ---@return LogLevel
 local function makeLevel(name, l, clr)
     return {
-        name = name,
-        level = l,
-        colorHtml = clr
+        name	= name;
+        level	= l;
+        color	= clr;
     }
 end
 
@@ -18,13 +19,13 @@ end
 local log = {
     levels = {
         off = makeLevel("off", 0),
-        verbose = makeLevel("verbose", 5, "#919191"),
-        debug = makeLevel("debug", 10),
-        info = makeLevel("info", 15, "#85eddf"),
-        warning = makeLevel("warn", 20, "#fcba03"),
-        error = makeLevel("err", 25, "#fa2e00"),
+        verbose = makeLevel("verbose", 5, {139, 139, 139}),
+        debug = makeLevel("debug", 10, {240, 240, 240}),
+        info = makeLevel("info", 15, {178, 235, 242}),
+        warning = makeLevel("warn", 20, {255, 236, 179}),
+        error = makeLevel("err", 25, {255, 138, 101}),
     },
-    handlers = {}
+    handlers = {} ---@type fun(mes:string, l:LogLevel)[]
 }
 table.insert(log.handlers, function(mes, l)
     print(mes)

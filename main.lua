@@ -14,6 +14,25 @@ local built = fs.is_directory(love.filesystem.getSource())
 BasePath = (built and love.filesystem.getWorkingDirectory() or love.filesystem.getSource())
 carrion.BasePath = BasePath;
 
+local messagelimit	= 40
+local messagex		= 20
+local messagey		= -20
+local messagegap	= 4
+local messagewidth	= 600
+
+local messages = {}	---@type [love.Text, LogLevel][]
+---@param m string
+---@param l LogLevel
+table.insert(Logger.handlers, function (m, l)
+	local message = love.graphics.newText(love.graphics.getFont())
+	message:setf(m, messagewidth, "left")
+	table.insert(messages, {message, l})
+
+	if #messages > messagelimit then
+		table.remove(messages, 1)
+	end
+end)
+
 local function startbot(arg)
 	local startpath	= arg[1]
 	local token		= arg[2]
@@ -56,6 +75,14 @@ function love.update(dt)
 end
 
 function love.draw()
+	local y = love.graphics.getHeight() + messagey
+	for i = #messages, 1, -1 do
+		local mes, _l = unpack(messages[i])
+		y = y - mes:getHeight() - 4
+		love.graphics.setColor(love.math.colorFromBytes(_l.color[1], _l.color[2], _l.color[3]))
+		love.graphics.draw(mes, messagex, y)
+		love.graphics.setColor(1, 1, 1, 1)
+	end
 end
 
 function love.quit()

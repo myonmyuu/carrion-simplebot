@@ -35,6 +35,21 @@ function Helpers.make_cookies(table)
 	return res
 end
 
+---@generic V
+---@generic R
+---@generic K
+---@param t table<`K`,`V`>
+---@param f fun(k: K, v: V): R
+---@return R[]
+function table.map(t, f)
+	local res = {}
+	for key, value in pairs(t) do
+		local r = f(key, value)
+		table.insert(res, r)
+	end
+	return res
+end
+
 function table.getIndex(col, item)
 	local fun = type(item) == "function"
 	for index, value in ipairs(col) do

@@ -1,33 +1,3 @@
----@alias HttpMethod : string
----|"GET"
----|"POST"
----|"DELETE"
----|"PUT"
-
----@class sse.Event
----@field type string
----@field timestamp string
-
----@class channeluser
----@field id		integer
----@field name		string
----@field badges	string[]
----@field avatar	string
-
----@class sse.Event.channel_message : sse.Event
----@field room_jid		string
----@field tab_id		string
----@field sender		channeluser
----@field message_id	string
----@field body			string
-
----@class https.options
----@field data		string? application/x-www-form-urlencoded
----@field method	HttpMethod?
----@field headers	table<string, string>
-
----@class SSEReceiver : userdata
-
 ---@class love.https
 ---@field request fun(url:string, options:https.options):code:number, body:string, headers:table<string, string>
 local https		= require "https"
@@ -41,6 +11,7 @@ local event		= require "lib.event"
 local json		= require "lib.json"
 
 local log = Logger:spec("carrion")
+local tprint = helpers.tprint
 
 ---@class HttpResponse
 local HttpResponse = {
@@ -126,17 +97,123 @@ function CarrionSSE:event_received(event_name, body_json)
 	ev(self.target, json.decode(body_json))
 end
 
-do --- Events
+local CarrionURL = "https://carrion.chat";
+
+---@param addr string
+---@param method HttpMethod
+local function makeendpoint(addr, method)
+	return {CarrionURL.."/api/v1"..addr, method}
+end
+---@param addr string
+---@param method HttpMethod
+---@return fun(v:string):[string, HttpMethod]
+local function makeendpointv(addr, method)
+	return function (v)
+		v = helpers.urlencode(v)
+		return {CarrionURL.."/api/v1"..(addr:format(v)), method}
+	end
+end
+---@param addr string
+---@param query string
+---@param method HttpMethod
+---@return fun(v:string, q:string):[string, HttpMethod]
+local function makeendpointvq(addr, query, method)
+	return function (v, q_val)
+		v = helpers.urlencode(v)
+		local basepath = CarrionURL.."/api/v1"..(addr:format(v))
+		local fullpath = basepath
+		if q_val then
+			fullpath = fullpath..("?%s=%s"):format(query, tostring(q_val))
+		end
+		return {fullpath, method}
+	end
+end
+
+---@class Carrion.User
+---@field id				Carrion.CharID
+---@field name				Carrion.CharName
+---@field presence_state	PresenceState
+---@field badges			Badge[]?
+---@field avatar			URL
+---@field name_color		NameColor
+---@field in_chat			boolean
+---@field intent			Intent
+
+---@class Carrion
+local Carrion = {
+	Users		= {};	---@type table<Carrion.CharID, Carrion.User>
+	UserIDMap	= {};	---@type table<Carrion.CharName, Carrion.CharID>
+	UserIDMapR	= {};	---@type table<Carrion.CharID, Carrion.CharName>
+	BasePath	= nil;	---@type string
+	Events = {
+		update		= event:new();
+		heartbeat	= event:new();
+		shutdown	= event:new();
+	};
+	Url	= "https://carrion.chat";
+	Api	= {
+		characters = {
+			me			= makeendpoint("/characters/me/", "GET");
+			byname		= makeendpointv("/characters/by-name/%s/", "GET");
+			byident		= makeendpointv("/characters/{%s}/", "GET");
+		};
+		bots = {
+			designate	= makeendpoint("/bots/designate/", "POST");
+		};
+		room = {
+			join		= makeendpoint("/presence/join-room/", "POST");
+			leave		= makeendpoint("/presence/leave-room/", "POST");
+			disconnect	= makeendpoint("/presence/disconnect/", "POST");
+			defaults	= makeendpoint("/presence/default-rooms/", "GET");
+			getusers	= makeendpointv("/presence/room/%s/", "GET");
+		};
+		presence = {
+			subscribe	= makeendpoint("/presence/subscribe-rooms/", "POST");
+			heartbeat	= makeendpoint("/presence/heartbeat/", "POST");
+			disconnect	= makeendpoint("/presence/disconnect/", "POST");
+		};
+		events = {
+			subscribe	= makeendpointv("/events/subscribe/%s/", "GET");
+		};
+		channels = {
+			ownercommand= makeendpoint("/channels/owner-command/", "POST");
+			directory	= makeendpoint("/channels/directory", "GET");
+			send		= makeendpointv("/channels/%s/send/", "POST");
+			gettabs		= makeendpointv("/channels/tabs/%s", "GET");
+		};
+		dm = {
+			pendingrooms= makeendpoint("/dm/my-pending-rooms/", "GET");
+			send		= makeendpoint("/dm/send-message/", "POST");
+			pullcradle	= makeendpointv("/dm/cradle/%s/", "GET");
+			deletecradle= makeendpointvq("/dm/cradle/%s/", "expected_count", "DELETE")
+		}
+	};
+	headers = {
+		content	= "Content-Type";
+		cookie	= "Cookie";
+		agent	= "User-Agent";
+		auth	= "Authorization";
+	};
+	content_types = {
+		json	= "application/json";
+	};
+}
+
+
+do --- SSE Events
 	function CarrionSSEEvents:fallback(data)
 		self.log:debugF("MISSING EVENT!!! fallback;")
 		helpers.tprint(data)
 	end
 
-	---@param data table
+	---@param data sse.EventData.connected
 	function CarrionSSEEvents:connected(data)
+		Carrion:filluserlist(data)
+		tprint(data)
 	end
 
 	do --- Messaging
+		---@param data sse.EventData.channel_message
 		function CarrionSSEEvents:channel_message(data)
 		end
 
@@ -154,22 +231,55 @@ do --- Events
 	end
 
 	do --- Presence
+		---@param data sse.EventData.user_online
 		function CarrionSSEEvents:user_online(data)
+			data.name	= data.character
+			data.id		= data.character_id
+			Carrion.UserIDMap[data.name]	= data.id
+			Carrion.UserIDMapR[data.id]		= data.name
+			Carrion.Users[data.id]			= data --[[@as Carrion.User]]
 		end
 
+		---@param data sse.EventData.user_offline
 		function CarrionSSEEvents:user_offline(data)
+			Carrion.Users[data.character_id] = nil
+			Carrion.UserIDMap[data.character] = nil
+			Carrion.UserIDMapR[data.character_id] = nil
 		end
 
+		---@param data sse.EventData.intent_updated
 		function CarrionSSEEvents:intent_changed(data)
+			local user = Carrion.Users[data.character_id]
+			if not user then
+				log:warningF("got intent update for offline user '%s' (%i)", data.character, data.character_id)
+				return
+			end
+			user.intent = data.intent
 		end
 
+		---@param data sse.EventData.presence_changed
 		function CarrionSSEEvents:presence_changed(data)
+			local user = Carrion.Users[data.character_id]
+			if not user then
+				log:warningF("got presence update for offline user '%s' (%i)", data.character, data.character_id)
+				return
+			end
+			user.presence_state = data.presence_state
 		end
 
+		---@param data sse.EventData.in_chat_changed
 		function CarrionSSEEvents:in_chat_changed(data)
+			local user = Carrion.Users[data.character_id]
+			if not user then
+				log:warningF("got in chat update for offline user '%s' (%i)", data.character, data.character_id)
+				return
+			end
+			user.in_chat = data.in_chat
 		end
 
+		---@param data sse.EventData.profile_updated
 		function CarrionSSEEvents:profile_updated(data)
+			log:verboseF("got a profile for '%s' (%i). Still not sure what to do with that.", data.character, data.character_id)
 		end
 	end
 
@@ -248,77 +358,28 @@ do --- Events
 	end
 end
 
-local CarrionURL = "https://carrion.chat";
 
----@param addr string
----@param method HttpMethod
-local function makeendpoint(addr, method)
-	return {CarrionURL.."/api/v1"..addr, method}
-end
----@param addr string
----@param method HttpMethod
----@return fun(v:string):[string, HttpMethod]
-local function makeendpointv(addr, method)
-	return function (v)
-		v = helpers.urlencode(v)
-		return {CarrionURL.."/api/v1"..(addr:format(v)), method}
+---@param data sse.EventData.connected
+function Carrion:filluserlist(data)
+	for name, id in pairs(data.ids) do
+		---@type Carrion.User
+		local user = {
+			id				= id;
+			name			= name;
+			avatar			= data.avatars[name];
+			badges			= data.badges[name];
+			presence_state	= data.presence_states[name];
+			in_chat			= data.in_chat[name] or false;
+			name_color		= data.name_colors[name];
+			intent			= data.intents[name];
+		}
+
+		self.UserIDMap[name] = id
+		self.UserIDMapR[id] = name
+		self.Users[id] = user
 	end
-end
----@class Carrion
-local Carrion = {
-	BasePath = nil; ---@type string
-	Events = {
-		update		= event:new();
-		heartbeat	= event:new();
-		shutdown	= event:new();
-	};
-	Url	= "https://carrion.chat";
-	Api	= {
-		characters = {
-			me			= makeendpoint("/characters/me/", "GET");
-			byname		= makeendpointv("/characters/by-name/%s/", "GET");
-			byident		= makeendpointv("/characters/{%s}/", "GET");
-		};
-		bots = {
-			designate	= makeendpoint("/bots/designate/", "POST");
-		};
-		room = {
-			join		= makeendpoint("/presence/join-room/", "POST");
-			leave		= makeendpoint("/presence/leave-room/", "POST");
-			disconnect	= makeendpoint("/presence/disconnect/", "POST");
-			defaults	= makeendpoint("/presence/default-rooms/", "GET");
-			getusers	= makeendpointv("/presence/room/%s/", "GET");
-		};
-		presence = {
-			subscribe	= makeendpoint("/presence/subscribe-rooms/", "POST");
-			heartbeat	= makeendpoint("/presence/heartbeat/", "POST");
-		};
-		events = {
-			subscribe	= makeendpointv("/events/subscribe/%s/", "GET");
-		};
-		channels = {
-			ownercommand= makeendpoint("/channels/owner-command/", "POST");
-			directory	= makeendpoint("/channels/directory", "GET");
-			send		= makeendpointv("/channels/%s/send/", "POST");
-			gettabs		= makeendpointv("/channels/tabs/%s", "GET");
-		};
-	};
-	headers = {
-		content	= "Content-Type";
-		cookie	= "Cookie";
-		agent	= "User-Agent";
-		auth	= "Authorization";
-	};
-	content_types = {
-		json	= "application/json";
-	};
-}
 
--- ---@param api string
--- ---@return string
--- function Carrion:getapiurl(api)
--- 	return self.url..(api or "")
--- end
+end
 
 ---@param sessionid string
 ---@return table
@@ -370,13 +431,15 @@ end
 function Carrion:request(api, options)
 	options.method = api[2]
 	local rcode, rbody, rheaders = https.request(api[1], options)
-	log:verboseF(
-		"received server response for address '%s:%s' (%i): %s",
-		api[1],
-		api[2],
-		rcode,
-		rbody or "no body"
-	)
+	if rcode ~= 200 then
+		log:warningF(
+			"received server response for address '%s:%s' (%i): %s",
+			api[1],
+			api[2],
+			rcode,
+			rbody or "no body"
+		)
+	end
 	return HttpResponse:new(rcode, rbody, rheaders)
 end
 
@@ -447,7 +510,11 @@ function BotIdentity:login()
 	Carrion.Events.update:register(self.sse, function (...)
 		if not sse.sse_check(self.sse.receiver) then
 			self.log:info("login expired, relogging...")
+
+			self:request(Carrion.Api.presence.disconnect)
 			self:unregister()
+			self.sse = nil
+
 			self:login()
 			return
 		end
@@ -486,11 +553,8 @@ function BotIdentity:login()
 end
 
 function BotIdentity:unregister()
-	Carrion.Events.update:unregister(self)
 	Carrion.Events.update:unregister(self.sse)
-	Carrion.Events.heartbeat:unregister(self)
 	Carrion.Events.heartbeat:unregister(self.sse)
-	Carrion.Events.shutdown:unregister(self)
 	Carrion.Events.shutdown:unregister(self.sse)
 end
 
@@ -499,8 +563,11 @@ do --- Event
 	end
 
 	function BotIdentity:heartbeat(dt)
+		if not self.sse then
+			return
+		end
 		-- print(self, self.log)
-		self.log:debug("heartbeating!")
+		-- self.log:debug("heartbeating!")
 		self:request(Carrion.Api.presence.heartbeat, Carrion:makehttpcontent {
 			character_name	= self.name;
 			is_active		= true;
