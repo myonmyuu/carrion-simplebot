@@ -45,9 +45,15 @@ function table.map(t, f)
 	local res = {}
 	for key, value in pairs(t) do
 		local r = f(key, value)
-		table.insert(res, r)
+		if r ~= nil then
+			table.insert(res, r)
+		end
 	end
 	return res
+end
+
+function table.contains(col, item)
+	return table.getIndex(col, item)
 end
 
 function table.getIndex(col, item)
@@ -68,9 +74,10 @@ function table.removeItem(col, item)
 end
 
 function table.removeall(t, n)
+	local fun = type(n) == "function"
 	local succ = false
 	for k, value in pairs(t) do
-		if value == n then
+		if (fun and n(value) == true) or (value == n) then
 			succ = true
 			t[k] = nil
 		end

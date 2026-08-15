@@ -35,6 +35,7 @@ end
 ---@return table?
 function HttpResponse:getbodytable()
 	if self.code == 404 then
+		print("returning nil body for 404")
 		return nil
 	end
 	return json.decode(self.body)
@@ -110,7 +111,7 @@ end
 local function makeendpointv(addr, method)
 	return function (v)
 		v = helpers.urlencode(v)
-		return {CarrionURL.."/api/v1"..(addr:format(v)), method}
+		return {CarrionURL.."/api/v1"..(addr:format(tostring(v))), method}
 	end
 end
 ---@param addr string
@@ -120,10 +121,10 @@ end
 local function makeendpointvq(addr, query, method)
 	return function (v, q_val)
 		v = helpers.urlencode(v)
-		local basepath = CarrionURL.."/api/v1"..(addr:format(v))
+		local basepath = CarrionURL.."/api/v1"..(addr:format(tostring(v)))
 		local fullpath = basepath
 		if q_val then
-			fullpath = fullpath..("?%s=%s"):format(query, tostring(q_val))
+			fullpath = fullpath..("?%s=%s"):format(tostring(query), tostring(q_val))
 		end
 		return {fullpath, method}
 	end
@@ -138,6 +139,7 @@ end
 ---@field name_color		NameColor
 ---@field in_chat			boolean
 ---@field intent			Intent
+---@field is_private		boolean?
 
 ---@class Carrion
 local Carrion = {
@@ -155,7 +157,8 @@ local Carrion = {
 		characters = {
 			me			= makeendpoint("/characters/me/", "GET");
 			byname		= makeendpointv("/characters/by-name/%s/", "GET");
-			byident		= makeendpointv("/characters/{%s}/", "GET");
+			byident		= makeendpointv("/characters/%s/", "GET");
+			bulk		= makeendpoint("/characters/bulk-profiles/", "POST"); --- send along "names": [ "a", "b"[, ...]]
 		};
 		bots = {
 			designate	= makeendpoint("/bots/designate/", "POST");
@@ -235,6 +238,7 @@ do --- SSE Events
 		function CarrionSSEEvents:user_online(data)
 			data.name	= data.character
 			data.id		= data.character_id
+			log:verboseF("user %s (%i) logging in", data.character, data.character_id)
 			Carrion.UserIDMap[data.name]	= data.id
 			Carrion.UserIDMapR[data.id]		= data.name
 			Carrion.Users[data.id]			= data --[[@as Carrion.User]]
@@ -242,6 +246,7 @@ do --- SSE Events
 
 		---@param data sse.EventData.user_offline
 		function CarrionSSEEvents:user_offline(data)
+			log:verboseF("user %s (%i) logging out", data.character, data.character_id)
 			Carrion.Users[data.character_id] = nil
 			Carrion.UserIDMap[data.character] = nil
 			Carrion.UserIDMapR[data.character_id] = nil
@@ -271,7 +276,8 @@ do --- SSE Events
 		function CarrionSSEEvents:in_chat_changed(data)
 			local user = Carrion.Users[data.character_id]
 			if not user then
-				log:warningF("got in chat update for offline user '%s' (%i)", data.character, data.character_id)
+				--- update gets sent after logout
+				-- log:warningF("got in chat update for offline user '%s' (%i)", data.character, data.character_id)
 				return
 			end
 			user.in_chat = data.in_chat
@@ -279,7 +285,7 @@ do --- SSE Events
 
 		---@param data sse.EventData.profile_updated
 		function CarrionSSEEvents:profile_updated(data)
-			log:verboseF("got a profile for '%s' (%i). Still not sure what to do with that.", data.character, data.character_id)
+			log:verboseF("got a profile update for '%s' (%i). Still not sure what to do with that.", data.character, data.character_id)
 		end
 	end
 
@@ -445,7 +451,8 @@ end
 
 ---@class BotIdentity
 local BotIdentity = {
-	name	= nil;	---@type string
+	name	= nil;	---@type Carrion.CharName
+	id		= nil;	---@type Carrion.CharID
 	token	= nil;	---@type string
 	carrion	= nil;	---@type Carrion
 	log		= nil;	---@type SpecLogger
@@ -493,12 +500,16 @@ function BotIdentity:request(api, opt, cookies)
 end
 
 function BotIdentity:login()
-	local sub_addr = self.carrion.Api.events.subscribe(self.name)[1]
+	self.log:debug("logging in!")
+	local sub_addr = Carrion.Api.events.subscribe(self.name)[1]
 	self.log:debugF("sending sse login... (%s)", sub_addr)
 	local sse_receiver = sse.sse_connect(
 		sub_addr,
-		self.carrion:makebotheaders(self.carrion:makebotcookies(), self.token)
+		Carrion:makebotheaders(Carrion:makebotcookies(), self.token)
 	)
+	self.id = self:request(Carrion.Api.characters.byname(self.name))
+		:getbodytable()
+		.id or error("unable to get bot id")
 	self.sse = CarrionSSE:createfrom(sse_receiver, self.log)
 	self.sse.target = setmetatable({}, {
 		__index = function (_, k)
@@ -511,6 +522,7 @@ function BotIdentity:login()
 		if not sse.sse_check(self.sse.receiver) then
 			self.log:info("login expired, relogging...")
 
+			self.log:debug("logging out & unregistering...")
 			self:request(Carrion.Api.presence.disconnect)
 			self:unregister()
 			self.sse = nil
@@ -549,7 +561,11 @@ function BotIdentity:login()
 	-- 	print("asd 3")
 	-- end):run()
 
+	self:postlogin()
 	return self.sse
+end
+
+function BotIdentity:postlogin()
 end
 
 function BotIdentity:unregister()

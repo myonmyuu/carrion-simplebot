@@ -14,7 +14,7 @@ local built = fs.is_directory(love.filesystem.getSource())
 BasePath = (built and love.filesystem.getWorkingDirectory() or love.filesystem.getSource())
 carrion.BasePath = BasePath;
 
-local messagelimit	= 40
+local messagelimit	= 80
 local messagex		= 20
 local messagey		= -20
 local messagegap	= 4
@@ -59,6 +59,9 @@ function love.load(arg)
 	startbot(arg)
 end
 
+local usercount = 0
+local inchatcount = 0
+
 function love.update(dt)
 	update_elapsed = update_elapsed + dt
 	heartbeat_elapsed = heartbeat_elapsed + dt
@@ -71,6 +74,13 @@ function love.update(dt)
 	if heartbeat_elapsed > HEARTBEAT_TIME then
 		heartbeat_elapsed = heartbeat_elapsed - HEARTBEAT_TIME
 		carrion.Events.heartbeat(HEARTBEAT_TIME)
+
+		usercount = 0
+		inchatcount = 0
+		for _, user in pairs(carrion.Users) do
+			usercount = usercount + 1
+			inchatcount = inchatcount + (user.in_chat and {1} or {0})[1]
+		end
 	end
 end
 
@@ -83,6 +93,8 @@ function love.draw()
 		love.graphics.draw(mes, messagex, y)
 		love.graphics.setColor(1, 1, 1, 1)
 	end
+
+	love.graphics.print(("Online users: %i.  In chat: %i."):format(usercount, inchatcount))
 end
 
 function love.quit()
