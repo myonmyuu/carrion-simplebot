@@ -4,9 +4,9 @@
 ---@class love.https
 ---@field request fun(url:string, options:https.options):code:number, body:string, headers:table<string, string>
 local https		= require "https"
-local json		= require "json"
-local helpers	= require "helpers"
-local carrion	= require "carrion"
+local json		= require "lib.json"
+local helpers	= require "lib.helpers"
+local carrion	= require "lib.carrion"
 
 local
 	session,

@@ -2,14 +2,14 @@
 local Helpers = {}
 
 function Helpers.tprint (tbl, height, indent)
-	if not tbl then return end
+	if not tbl then print("tried to tprint nil value") end
 	if not height then height = 0 end
 	if not indent then indent = 0 end
 	if indent > 10 then
 		return
 	end
 	if type(tbl) ~= "table" then
-		print(tbl)
+		print(tostring(tbl))
 		return
 	end
 	for k, v in pairs(tbl) do
@@ -24,6 +24,36 @@ function Helpers.tprint (tbl, height, indent)
 			print(formatting .. tostring(v), indent*8, 16*height)
 		end
 	end
+end
+
+function Helpers.topstring(tbl, height, indent)
+	if not tbl then return "nil" end
+	if not height then height = 0 end
+	if not indent then indent = 0 end
+	if indent > 10 then
+		return
+	end
+	if type(tbl) ~= "table" then
+		return tostring(tbl)
+	end
+	local ret = "{\n"
+	for k, v in pairs(tbl) do
+		height = height+1
+		local nextval
+		if type(v) == "table" then
+			nextval = Helpers.topstring(v, height + 1, indent + 1)
+		elseif type(v) == 'function' then
+			nextval = "function"
+		else
+			nextval = tostring(v)
+		end
+		ret = ("%s%s %s: %s;\n")
+			:format(ret, string.rep("\t", indent), tostring(k), "%s")
+			:format(nextval)
+	end
+
+	ret = ("%s%s}"):format(ret, string.rep("\t", math.max(0, indent - 1)))
+	return ret
 end
 
 function Helpers.make_cookies(table)
@@ -53,7 +83,7 @@ function table.map(t, f)
 end
 
 function table.contains(col, item)
-	return table.getIndex(col, item)
+	return table.getIndex(col, item) ~= 0
 end
 
 function table.getIndex(col, item)

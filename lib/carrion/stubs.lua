@@ -15,9 +15,20 @@
 
 --- SSE
 
+---@class SSE
+---@field sse_connect	fun(url:string, headers:table, method:string?):SSEReceiver
+---@field sse_read		fun(data:SSEReceiver, f:fun(event:string, data:string))
+---@field sse_check		fun(data:SSEReceiver):boolean
+
 ---@class SSEReceiver		: userdata
 ---@class Carrion.CharName	: string
 ---@class Carrion.CharID	: integer
+---@class Carrion.PublicKey
+---@field raw	string
+---@field kty	string
+---@field crv	string
+---@field x		string
+---@field y		string
 
 ---@alias PresenceState : string
 ---|"online"
@@ -46,6 +57,10 @@
 ---@alias NameColor : string
 ---|"black"
 ---|"dull_teal"
+
+---@alias ChannelRole : string
+---|"mod"
+---|"owner"
 
 ---@class sse.EventData
 
@@ -105,3 +120,9 @@
 
 ---@class sse.EventData.intent_updated : sse.TypedEventData, sse.IDEventData
 ---@field intent			Intent
+
+---@class sse.EventData.user_joined_room : sse.TypedEventData
+---@field character_id		Carrion.CharID
+---@field character			Carrion.CharName
+---@field role				ChannelRole?
+---@field room				string

@@ -1,17 +1,37 @@
 ---@class love.https
 ---@field request fun(url:string, options:https.options):code:number, body:string, headers:table<string, string>
 local https		= require "https"
----@class SSE
----@field sse_connect	fun(url:string, headers:table, method:string?):SSEReceiver
----@field sse_read		fun(data:SSEReceiver, f:fun(event:string, data:string))
----@field sse_check		fun(data:SSEReceiver):boolean
+---@type SSE
 local sse		= require "sse"
 local helpers	= require "lib.helpers"
 local event		= require "lib.event"
 local json		= require "lib.json"
+local fs		= require "lib.fs"
 
 local log = Logger:spec("carrion")
 local tprint = helpers.tprint
+local topstring = helpers.topstring
+
+local savedir = "save"
+local keydir = fs.join(savedir, "keys")
+
+local function getssechannel(name)
+	return "channel_sse_"..name
+end
+
+local pkeycache = {}	---@type table<Carrion.CharID, Carrion.PublicKey>
+local modcache = {}		---@type table<string, Carrion.CharName[]>
+
+---@param channel string
+---@return Carrion.CharName[]
+local function ensurechannelmods(channel)
+	local mods = modcache[channel]
+	if not mods then
+		mods = {}
+		modcache[channel] = mods
+	end
+	return mods
+end
 
 ---@class HttpResponse
 local HttpResponse = {
@@ -61,29 +81,39 @@ end
 
 ---@class CarrionSSE
 local CarrionSSE = {
+	name		= nil;	---@type string
 	receiver	= nil;	---@type SSEReceiver
 	log			= nil;	---@type SpecLogger
 	target		= nil;	---@type CarrionSSE?
+	thread		= nil;	---@type love.Thread?
 }
 
 ---@param receiver SSEReceiver
 ---@param l SpecLogger?
 ---@param ev CarrionSSEEvents?
+---@param name string?
 ---@return CarrionSSE
-function CarrionSSE:createfrom(receiver, l, ev)
+function CarrionSSE:createfrom(receiver, l, ev, name)
 	local csse = {} ---@type CarrionSSE
 	csse.receiver = receiver
 	csse.log = l or Logger:spec("csse")
 	csse.events = ev or CarrionSSEEvents:new({
 		log = csse.log;
 	})
+	csse.name = name or "NONAME"
+	csse.thread = love.thread.newThread("ssethread.lua")
 	return setmetatable(csse, { __index = self })
 end
 
 function CarrionSSE:poll()
-	sse.sse_read(self.receiver, function (ev, data)
+	-- sse.sse_read(self.receiver, function (ev, data)
+	-- 	self:event_received(ev, data)
+	-- end)
+	local channel = love.thread.getChannel(getssechannel(self.name))
+	while channel:peek() do
+		local ev, data = unpack(channel:pop())
 		self:event_received(ev, data)
-	end)
+	end
 end
 
 ---@param event_name	string
@@ -95,7 +125,7 @@ function CarrionSSE:event_received(event_name, body_json)
 		ev = CarrionSSEEvents.fallback
 	end
 
-	ev(self.target, json.decode(body_json))
+	ev(self.target, json.decode(body_json), body_json)
 end
 
 local CarrionURL = "https://carrion.chat";
@@ -151,6 +181,7 @@ local Carrion = {
 		update		= event:new();
 		heartbeat	= event:new();
 		shutdown	= event:new();
+		cmd			= event:new();
 	};
 	Url	= "https://carrion.chat";
 	Api	= {
@@ -162,6 +193,12 @@ local Carrion = {
 		};
 		bots = {
 			designate	= makeendpoint("/bots/designate/", "POST");
+		};
+		keys = {
+			publish		= makeendpoint("/keys/publish/", "POST"); --- "public_key": "string"
+			genbotpair	= makeendpoint("/keys/bot/generate-keypair/", "POST");
+			mykey		= makeendpoint("/keys/my-key/", "GET");
+			keyfrom		= makeendpointv("/keys/%s/", "GET");
 		};
 		room = {
 			join		= makeendpoint("/presence/join-room/", "POST");
@@ -204,15 +241,26 @@ local Carrion = {
 
 
 do --- SSE Events
-	function CarrionSSEEvents:fallback(data)
-		self.log:debugF("MISSING EVENT!!! fallback;")
-		helpers.tprint(data)
+	function CarrionSSEEvents:fallback(data, raw)
+		self.log:debug("MISSING EVENT!!! fallback;", topstring(data))
 	end
 
 	---@param data sse.EventData.connected
 	function CarrionSSEEvents:connected(data)
 		Carrion:filluserlist(data)
-		tprint(data)
+
+		print(topstring(data))
+	end
+
+	function CarrionSSEEvents:keepalive(data)
+	end
+
+	function CarrionSSEEvents:error(data)
+		self.log:error("SSE error: ", topstring(data))
+	end
+
+	local function debugprintevent(o, data, t)
+		o.log:debug("(debug)", data.type or t or "unknown", topstring(data))
 	end
 
 	do --- Messaging
@@ -230,6 +278,7 @@ do --- SSE Events
 		end
 
 		function CarrionSSEEvents:cross_character_notification(data)
+			debugprintevent(self, data)
 		end
 	end
 
@@ -285,15 +334,18 @@ do --- SSE Events
 
 		---@param data sse.EventData.profile_updated
 		function CarrionSSEEvents:profile_updated(data)
-			log:verboseF("got a profile update for '%s' (%i). Still not sure what to do with that.", data.character, data.character_id)
+			debugprintevent(self, data)
 		end
 	end
 
 	do --- Rooms
+		---@param data sse.EventData.user_joined_room
 		function CarrionSSEEvents:user_joined_room(data)
+			self.log:info("joined;", topstring(data))
 		end
 
 		function CarrionSSEEvents:user_left_room(data)
+			-- self.log:verbose("left;", topstring(data))
 		end
 
 		function CarrionSSEEvents:topic_changed(data)
@@ -328,15 +380,19 @@ do --- SSE Events
 
 	do --- Ownership
 		function CarrionSSEEvents:claim_granted(data)
+			debugprintevent(self, data)
 		end
 
 		function CarrionSSEEvents:mod_invite(data)
+			debugprintevent(self, data)
 		end
 
 		function CarrionSSEEvents:mod_accepted(data)
+			debugprintevent(self, data)
 		end
 
 		function CarrionSSEEvents:mod_granted(data)
+			debugprintevent(self, data)
 		end
 
 		function CarrionSSEEvents:mod_revoked(data)
@@ -351,6 +407,7 @@ do --- SSE Events
 
 	do --- Other
 		function CarrionSSEEvents:broadcast(data)
+			debugprintevent(self, data)
 		end
 
 		function CarrionSSEEvents:blind_date_match(data)
@@ -451,14 +508,17 @@ end
 
 ---@class BotIdentity
 local BotIdentity = {
-	name	= nil;	---@type Carrion.CharName
-	id		= nil;	---@type Carrion.CharID
-	token	= nil;	---@type string
-	carrion	= nil;	---@type Carrion
-	log		= nil;	---@type SpecLogger
+	name		= nil;	---@type Carrion.CharName
+	id			= nil;	---@type Carrion.CharID
+	token		= nil;	---@type string
+	carrion		= nil;	---@type Carrion
+	log			= nil;	---@type SpecLogger
 
-	sse		= nil;	---@type CarrionSSE
-	sse_ev	= nil;	---@type CarrionSSEEvents
+	publickey	= nil;	---@type Carrion.PublicKey
+	privatekey	= nil;	---@type string
+
+	sse			= nil;	---@type CarrionSSE
+	sse_ev		= nil;	---@type CarrionSSEEvents
 }
 Carrion.BotIdentity = BotIdentity
 
@@ -476,13 +536,12 @@ function BotIdentity:create(name, token, carrion, o)
 	o.log = Logger:spec(o.name)
 	o.sse_ev = CarrionSSEEvents:new(setmetatable({}, { __index = o }))
 
-	return setmetatable(
-		o, {
-			__index = self;
-			__tostring = function (t)
-				return ("(botidentity (%s))"):format(t.name)
-			end;
-		})
+	return setmetatable(o, {
+		__index = self;
+		__tostring = function (t)
+			return ("(botidentity (%s))"):format(t.name)
+		end;
+	})
 end
 
 ---@param api [string, string]
@@ -499,18 +558,73 @@ function BotIdentity:request(api, opt, cookies)
 	return self.carrion:request(api, opt)
 end
 
+---@param rawkey any
+---@return Carrion.PublicKey
+local function parsepkey(rawkey)
+	local key = json.decode(rawkey)
+	key.raw = rawkey
+	return key
+end
+
+function BotIdentity:ensurekeys()
+	self.log:info("getting keys...")
+	fs.create_directory(keydir)
+	local keyfile = fs.join(keydir, self.id)
+	local haskey = fs.exists(keyfile)
+
+	if haskey then
+		self.log:info("reading stored private key")
+		self.privatekey = fs.read(keyfile)
+	else
+		self.log:info("no saved key found, requesting new keypair")
+		local req_t = self:request(Carrion.Api.keys.genbotpair):getbodytable()
+		if not req_t or not req_t.success then
+			self.log:error("unable to generate new keypair")
+			return
+		end
+
+		self.privatekey = req_t.private_key_hex or error("error getting private key from http response")
+		fs.write(keyfile, self.privatekey)
+	end
+
+	self.log:info("retrieving public key")
+	local pubreq = self:request(Carrion.Api.keys.mykey):getbodytable()
+	local rawkey = pubreq and pubreq.public_key or error("error getting public key from http response")
+	self.publickey = parsepkey(rawkey)
+	pkeycache[self.id] = self.publickey
+	tprint(self.publickey)
+	self.log:info("keys OK")
+end
+
+---@param id any
+---@return boolean
+---@return Carrion.PublicKey?
+function BotIdentity:getpeerkey(id)
+	local key = pkeycache[id]---@type Carrion.PublicKey
+	if not key then
+		local keyres = self:request(Carrion.Api.keys.keyfrom(id)):getbodytable()
+		local rkey = keyres and keyres.public_key
+		key = parsepkey(rkey)
+	end
+	return key ~= nil, key
+end
+
 function BotIdentity:login()
 	self.log:debug("logging in!")
 	local sub_addr = Carrion.Api.events.subscribe(self.name)[1]
 	self.log:debugF("sending sse login... (%s)", sub_addr)
-	local sse_receiver = sse.sse_connect(
-		sub_addr,
-		Carrion:makebotheaders(Carrion:makebotcookies(), self.token)
-	)
-	self.id = self:request(Carrion.Api.characters.byname(self.name))
-		:getbodytable()
-		.id or error("unable to get bot id")
-	self.sse = CarrionSSE:createfrom(sse_receiver, self.log)
+
+	-- local sse_receiver = sse.sse_connect(
+	-- 	sub_addr,
+	-- 	Carrion:makebotheaders(Carrion:makebotcookies(), self.token)
+	-- )
+	local req = self:request(Carrion.Api.characters.byname(self.name))
+	local req_t = req:getbodytable()
+	if not req_t then
+		return
+	end
+	self.id = req_t and req_t.id or error("unable to get bot id")
+	self.sse = CarrionSSE:createfrom(sse_receiver, self.log, nil, tostring(self.id))
 	self.sse.target = setmetatable({}, {
 		__index = function (_, k)
 			return self[k] or self.sse[k] or self.sse_ev[k]
@@ -527,13 +641,18 @@ function BotIdentity:login()
 			self:unregister()
 			self.sse = nil
 
-			self:login()
+			while self.sse == nil do
+				self:login()
+				love.timer.sleep(3)
+			end
 			return
 		end
 
 		self:update(...)
 		self.sse:poll()
 	end)
+
+	-- self.sse.thread:start(getssechannel(self.name), self.sse.receiver)
 	Carrion.Events.heartbeat:register(self.sse, function (...) self:heartbeat(...) end)
 	Carrion.Events.shutdown:register(self.sse, function (...) self:shutdown(...) end)
 	-- self.sse_poll_task = action:fromFunc(function (act)
@@ -561,7 +680,10 @@ function BotIdentity:login()
 	-- 	print("asd 3")
 	-- end):run()
 
+	self:ensurekeys()
 	self:postlogin()
+
+	-- self:heartbeat()
 	return self.sse
 end
 
@@ -572,6 +694,9 @@ function BotIdentity:unregister()
 	Carrion.Events.update:unregister(self.sse)
 	Carrion.Events.heartbeat:unregister(self.sse)
 	Carrion.Events.shutdown:unregister(self.sse)
+	if self.sse.thread and self.sse.thread:isRunning() then
+		love.thread.getChannel(getssechannel(self.name).."k"):push(true)
+	end
 end
 
 do --- Event

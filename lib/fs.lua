@@ -247,7 +247,11 @@ function fs.is_file(path)
    if working_dir_prefix and not fs.is_absolute(path) then
       path = fs.join(working_dir_prefix, path)
    end
+--    print("PATH:", path)
    local info = fs.get_info(path)
+	-- local info = love.filesystem.getInfo(path)
+	
+--    print("INFO:", info)
    return info ~= nil and info.type == "file"
 end
 
@@ -488,6 +492,28 @@ function fs.sanitize(path, rep)
    end
 
    return path:sub(0, 255)
+end
+
+---@param name string
+---@return boolean
+function fs.file_exists(name)
+   local f=io.open(name,"r")
+   if f~=nil then io.close(f) return true else return false end
+end
+
+---comment
+---@param path string
+---@return string?
+function fs.read_to_string(path)
+	local file = io.open(path, "r")
+	if file then
+		local content = file:read("*a")
+		file:close()
+		return content
+	else
+		print("Cannot open file.")
+	end
+	return nil
 end
 
 return fs
