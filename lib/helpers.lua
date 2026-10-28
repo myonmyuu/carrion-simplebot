@@ -28,8 +28,8 @@ end
 
 function Helpers.topstring(tbl, height, indent)
 	if not tbl then return "nil" end
-	if not height then height = 0 end
-	if not indent then indent = 0 end
+	if not height then height = 1 end
+	if not indent then indent = 1 end
 	if indent > 10 then
 		return
 	end
@@ -46,10 +46,11 @@ function Helpers.topstring(tbl, height, indent)
 			nextval = "function"
 		else
 			nextval = tostring(v)
+				:gsub("%%20", " ")
 		end
 		ret = ("%s%s %s: %s;\n")
 			:format(ret, string.rep("\t", indent), tostring(k), "%s")
-			:format(nextval)
+			:format(tostring(nextval))
 	end
 
 	ret = ("%s%s}"):format(ret, string.rep("\t", math.max(0, indent - 1)))
@@ -126,6 +127,8 @@ end
 function Helpers.urlencode(url)
 	if url == nil then
 		return
+	elseif type(url) ~= "string" then
+		url = tostring(url)
 	end
 	url = url:gsub("\n", "\r\n")
 	url = url:gsub("([^%w ])", char_to_hex)

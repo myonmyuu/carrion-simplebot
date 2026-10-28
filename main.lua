@@ -146,7 +146,7 @@ local inchatcount = 0
 function love.update(dt)
 	local ok, res = pcall(Update, dt)
 	if not ok then
-		-- handle error?
+		rootlog:errorF("error in update: '%s'", tostring(res))
 	end
 end
 

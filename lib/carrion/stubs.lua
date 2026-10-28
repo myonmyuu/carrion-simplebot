@@ -19,6 +19,7 @@
 ---@field sse_connect	fun(url:string, headers:table, method:string?):SSEReceiver
 ---@field sse_read		fun(data:SSEReceiver, f:fun(event:string, data:string))
 ---@field sse_check		fun(data:SSEReceiver):boolean
+---@field sse_close		fun(data:SSEReceiver):boolean
 
 ---@class SSEReceiver		: userdata
 ---@class Carrion.CharName	: string
@@ -122,7 +123,17 @@
 ---@field intent			Intent
 
 ---@class sse.EventData.user_joined_room : sse.TypedEventData
----@field character_id		Carrion.CharID
 ---@field character			Carrion.CharName
 ---@field role				ChannelRole?
 ---@field room				string
+
+---@class sse.EventData.dm_message : sse.TypedEventData
+---@field from				Carrion.CharName
+---@field from_id			Carrion.CharID
+---@field message_id		string
+---@field to_id				Carrion.CharID
+---@field tab_id			string
+---@field timestamp			integer
+---@field room_jid			string
+---@field tab_metadata		{ type: string, title: string }
+---@field body				string

@@ -3,6 +3,10 @@
 local https		= require "https"
 ---@type SSE
 local sse		= require "sse"
+---@class CarrionCrypta
+---@field decrypt_carrion_message fun(privatekey: string, publickey: string, body: string)
+---@field encrypt_carrion_message fun(privatekey: string, publickey: string, body: string)
+local crypta	= require "carrion-crypta"
 local helpers	= require "lib.helpers"
 local event		= require "lib.event"
 local json		= require "lib.json"
@@ -20,7 +24,7 @@ local function getssechannel(name)
 end
 
 local pkeycache = {}	---@type table<Carrion.CharID, Carrion.PublicKey>
-local modcache = {}		---@type table<string, Carrion.CharName[]>
+local modcache = {}		---@type table<string, Carrion.CharID[]>
 
 ---@param channel string
 ---@return Carrion.CharName[]
@@ -82,20 +86,17 @@ end
 ---@class CarrionSSE
 local CarrionSSE = {
 	name		= nil;	---@type string
-	receiver	= nil;	---@type SSEReceiver
 	log			= nil;	---@type SpecLogger
 	target		= nil;	---@type CarrionSSE?
 	thread		= nil;	---@type love.Thread?
 }
 
----@param receiver SSEReceiver
 ---@param l SpecLogger?
 ---@param ev CarrionSSEEvents?
 ---@param name string?
 ---@return CarrionSSE
-function CarrionSSE:createfrom(receiver, l, ev, name)
+function CarrionSSE:createfrom(l, ev, name)
 	local csse = {} ---@type CarrionSSE
-	csse.receiver = receiver
 	csse.log = l or Logger:spec("csse")
 	csse.events = ev or CarrionSSEEvents:new({
 		log = csse.log;
@@ -145,16 +146,26 @@ local function makeendpointv(addr, method)
 	end
 end
 ---@param addr string
----@param query string
 ---@param method HttpMethod
----@return fun(v:string, q:string):[string, HttpMethod]
-local function makeendpointvq(addr, query, method)
-	return function (v, q_val)
-		v = helpers.urlencode(v)
+---@param ... string
+---@return fun(v:string, ...:string):[string, HttpMethod]
+local function makeendpointvq(addr, method, ...)
+	local queries = {...}
+	return function (v, ...)
+		-- v = helpers.urlencode(v)
 		local basepath = CarrionURL.."/api/v1"..(addr:format(tostring(v)))
 		local fullpath = basepath
-		if q_val then
-			fullpath = fullpath..("?%s=%s"):format(tostring(query), tostring(q_val))
+		local qvals = {...}
+
+		for i = 1, #qvals do
+			local val = qvals[i]
+			if val then
+				fullpath = fullpath..("%s%s=%s"):format(
+					i == 1 and "?" or "&",
+					tostring(queries[math.min(#queries, i)]),
+					tostring(val)
+				)
+			end
 		end
 		return {fullpath, method}
 	end
@@ -225,7 +236,7 @@ local Carrion = {
 			pendingrooms= makeendpoint("/dm/my-pending-rooms/", "GET");
 			send		= makeendpoint("/dm/send-message/", "POST");
 			pullcradle	= makeendpointv("/dm/cradle/%s/", "GET");
-			deletecradle= makeendpointvq("/dm/cradle/%s/", "expected_count", "DELETE")
+			deletecradle= makeendpointvq("/dm/cradle/%s/", "DELETE", "message_ids")
 		}
 	};
 	headers = {
@@ -249,7 +260,7 @@ do --- SSE Events
 	function CarrionSSEEvents:connected(data)
 		Carrion:filluserlist(data)
 
-		print(topstring(data))
+		-- print(topstring(data))
 	end
 
 	function CarrionSSEEvents:keepalive(data)
@@ -268,6 +279,7 @@ do --- SSE Events
 		function CarrionSSEEvents:channel_message(data)
 		end
 
+		---@param data sse.EventData.dm_message
 		function CarrionSSEEvents:dm_message(data)
 		end
 
@@ -342,6 +354,22 @@ do --- SSE Events
 		---@param data sse.EventData.user_joined_room
 		function CarrionSSEEvents:user_joined_room(data)
 			self.log:info("joined;", topstring(data))
+			if data.role then
+				self:sawmod(data)
+				local mods = ensurechannelmods(data.room)
+---@diagnostic disable-next-line: undefined-field
+				if self.request then
+					local id = Carrion:getuserid(data.character, self--[[@as BotIdentity]])
+					if not table.contains(mods, id) then
+					table.insert(mods, id)
+				end
+				end
+			end
+		end
+
+		---@param data sse.EventData.user_joined_room
+		function CarrionSSEEvents:sawmod(data)
+			self.log:verbose("saw mod fallback")
 		end
 
 		function CarrionSSEEvents:user_left_room(data)
@@ -444,6 +472,18 @@ function Carrion:filluserlist(data)
 
 end
 
+---@param name Carrion.CharName
+---@param bot BotIdentity
+---@return Carrion.CharID
+function Carrion:getuserid(name, bot)
+	local cacheres = self.UserIDMap[name]
+	if cacheres then
+		return cacheres
+	end
+	local chreqt = bot:request(self.Api.characters.byname(name)):getbodytable()
+	return chreqt and chreqt.id or error(("unable to get id for user '%s'"):format(name))
+end
+
 ---@param sessionid string
 ---@return table
 function Carrion:makeusercookies(sessionid)
@@ -544,6 +584,68 @@ function BotIdentity:create(name, token, carrion, o)
 	})
 end
 
+---@param room string
+function BotIdentity:readcradle(room)
+	self.log:verboseF("reading cradle '%s'", room)
+	local mesrqt = self:request(Carrion.Api.dm.pullcradle(room)):getbodytable()
+	if (not mesrqt) or mesrqt.count == 0 then
+		self.log:warningF("tried to read from empty cradle in '%s'", room)
+		return
+	end
+	local publickey ---@type Carrion.PublicKey?
+	local function getpublickey(id)
+		if not publickey then
+			local ok, key = self:getpeerkey(id)
+			publickey = ok and key or error(("unable to get key for %s"):format(tostring(id)))
+		end
+		return publickey
+	end
+
+	local ids = {}
+
+	for _, value in pairs(mesrqt.messages) do
+		--[[@cast value sse.EventData.dm_message]]
+		table.insert(ids, value.message_id)
+		local pkey = getpublickey(value.from_id).raw
+		self.log:verboseF("message, from: %s (%i). Key: '%s': <%s>", value.from, value.from_id, pkey, value.body)
+
+		local ok, decrypted_message = pcall(
+			crypta.decrypt_carrion_message,
+			self.privatekey,
+			pkey,
+			value.body
+		)
+		if ok then
+			self:dm(
+				decrypted_message,
+				value
+			)
+		else
+			self.log:errorF("error decrypting message: '%s'", tostring(decrypted_message))
+		end
+	end
+
+	if #ids > 0 then
+		-- self:request(Carrion.Api.dm.deletecradle(room, unpack(ids)))
+	end
+end
+
+function BotIdentity:readdms()
+	self.log:verbose("reading dms...")
+	local dmreqt = self:request(Carrion.Api.dm.pendingrooms):getbodytable()
+	if (not dmreqt) or dmreqt.count == 0 then
+		return
+	end
+	for _, value in pairs(dmreqt.room_jids) do
+		self:readcradle(value)
+	end
+end
+
+---@param message string
+---@param ev sse.EventData.dm_message
+function BotIdentity:dm(message, ev)
+end
+
 ---@param api [string, string]
 ---@param opt https.options?
 ---@param cookies table<string, any>?
@@ -612,7 +714,6 @@ end
 function BotIdentity:login()
 	self.log:debug("logging in!")
 	local sub_addr = Carrion.Api.events.subscribe(self.name)[1]
-	self.log:debugF("sending sse login... (%s)", sub_addr)
 
 	-- local sse_receiver = sse.sse_connect(
 	-- 	sub_addr,
@@ -624,7 +725,7 @@ function BotIdentity:login()
 		return
 	end
 	self.id = req_t and req_t.id or error("unable to get bot id")
-	self.sse = CarrionSSE:createfrom(sse_receiver, self.log, nil, tostring(self.id))
+	self.sse = CarrionSSE:createfrom(self.log, nil, self.name)
 	self.sse.target = setmetatable({}, {
 		__index = function (_, k)
 			return self[k] or self.sse[k] or self.sse_ev[k]
@@ -632,8 +733,14 @@ function BotIdentity:login()
 		__newindex = self;
 	})
 
+	self.sse.thread:start(
+		getssechannel(self.name),
+		sub_addr,
+		Carrion:makebotheaders(Carrion:makebotcookies(), self.token)
+	)
+
 	Carrion.Events.update:register(self.sse, function (...)
-		if not sse.sse_check(self.sse.receiver) then
+		if not self.sse.thread:isRunning() then
 			self.log:info("login expired, relogging...")
 
 			self.log:debug("logging out & unregistering...")
@@ -651,34 +758,8 @@ function BotIdentity:login()
 		self:update(...)
 		self.sse:poll()
 	end)
-
-	-- self.sse.thread:start(getssechannel(self.name), self.sse.receiver)
 	Carrion.Events.heartbeat:register(self.sse, function (...) self:heartbeat(...) end)
-	Carrion.Events.shutdown:register(self.sse, function (...) self:shutdown(...) end)
-	-- self.sse_poll_task = action:fromFunc(function (act)
-	-- 	local login_attempts = 0
-	-- 	print("asd")
-	-- 	act:delay(0.1)
-	-- 	while not sse.sse_check(self.sse.receiver) do
-	-- 		self.log:debug("waiting for login...")
-	-- 		login_attempts = login_attempts + 1
-	-- 		if login_attempts > 20 then
-	-- 			self.log:debug("unable to log in, aborting")
-	-- 			return
-	-- 		end
-	-- 		act:delay(0.5)
-	-- 	end
-	-- 	print("asd 2")
-	-- 	while true do
-	-- 		local ok, pollres, err = xpcall(self.poll, debug.traceback, self, act)
-	-- 		print("POLL RES", ok, pollres, err)
-	-- 		if not pollres then
-	-- 			-- break
-	-- 		end
-	-- 		act:delay(0.1)
-	-- 	end
-	-- 	print("asd 3")
-	-- end):run()
+	Carrion.Events.shutdown:register(self.sse, function (...) self:_shutdown_int(...) end)
 
 	self:ensurekeys()
 	self:postlogin()
@@ -696,6 +777,7 @@ function BotIdentity:unregister()
 	Carrion.Events.shutdown:unregister(self.sse)
 	if self.sse.thread and self.sse.thread:isRunning() then
 		love.thread.getChannel(getssechannel(self.name).."k"):push(true)
+		self.sse.thread:wait()
 	end
 end
 
@@ -715,8 +797,13 @@ do --- Event
 		})
 	end
 
+	function BotIdentity:_shutdown_int(...)
+		self:unregister()
+		self:request(Carrion.Api.presence.disconnect)
+		self:shutdown(...)
+	end
+
 	function BotIdentity:shutdown(...)
-		
 	end
 end
 
