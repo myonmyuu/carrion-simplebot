@@ -11,6 +11,7 @@ local helpers	= require "lib.helpers"
 local event		= require "lib.event"
 local json		= require "lib.json"
 local fs		= require "lib.fs"
+local socket	= require "socket"
 
 local log = Logger:spec("carrion")
 local tprint = helpers.tprint
@@ -25,6 +26,7 @@ end
 
 local pkeycache = {}	---@type table<Carrion.CharID, Carrion.PublicKey>
 local modcache = {}		---@type table<string, Carrion.CharID[]>
+local dmroomcache = {}	---@type table<string, string>
 
 ---@param channel string
 ---@return Carrion.CharName[]
@@ -236,7 +238,8 @@ local Carrion = {
 			pendingrooms= makeendpoint("/dm/my-pending-rooms/", "GET");
 			send		= makeendpoint("/dm/send-message/", "POST");
 			pullcradle	= makeendpointv("/dm/cradle/%s/", "GET");
-			deletecradle= makeendpointvq("/dm/cradle/%s/", "DELETE", "message_ids")
+			deletecradle= makeendpointvq("/dm/cradle/%s/", "DELETE", "message_ids");
+			generateid	= makeendpoint("/dm/generate-room/", "POST"); --- { "target_character_name": "", "target_character_id": 0 }
 		}
 	};
 	headers = {
@@ -584,6 +587,46 @@ function BotIdentity:create(name, token, carrion, o)
 	})
 end
 
+local function gettimems()
+	return math.floor(socket.gettime() * 1000)
+end
+
+function BotIdentity:senddm(message, reply, recipient, id)
+	local rok, room = self:getdmroom(recipient, id)
+	if not rok then
+		self.log:warningF("unable to send dm to '%s', unable to get room id", tostring(recipient))
+		return
+	end
+
+	local kok, pkey = self:getpeerkey(id)
+	if not kok then
+		self.log:warningF("unable to send dm to '%s', unable to get peer key", tostring(recipient))
+		return
+	end
+
+	local eok, encrypted_message = pcall(
+		crypta.encrypt_carrion_message,
+		self.privatekey,
+		pkey.raw,
+		message
+	)
+	if not eok then
+		self.log:warningF("unable to send dm to '%s', unable to encrypt message: %s", tostring(recipient), tostring(encrypted_message))
+		return
+	end
+
+	self:request(
+		Carrion.Api.dm.send,
+		Carrion:makehttpcontent {
+			body			= encrypted_message;
+			room_jid		= room;
+			timestamp		= gettimems();
+			recipient_id	= id;
+			-- message_id		= "should be decided by server?";
+		}---[[@as sse.EventData.dm_message]]
+	)
+end
+
 ---@param room string
 function BotIdentity:readcradle(room)
 	self.log:verboseF("reading cradle '%s'", room)
@@ -607,7 +650,7 @@ function BotIdentity:readcradle(room)
 		--[[@cast value sse.EventData.dm_message]]
 		table.insert(ids, value.message_id)
 		local pkey = getpublickey(value.from_id).raw
-		self.log:verboseF("message, from: %s (%i). Key: '%s': <%s>", value.from, value.from_id, pkey, value.body)
+		-- self.log:verboseF("message, from: %s (%i). Key: '%s': <%s>", value.from, value.from_id, pkey, value.body)
 
 		local ok, decrypted_message = pcall(
 			crypta.decrypt_carrion_message,
@@ -626,7 +669,7 @@ function BotIdentity:readcradle(room)
 	end
 
 	if #ids > 0 then
-		-- self:request(Carrion.Api.dm.deletecradle(room, unpack(ids)))
+		self:request(Carrion.Api.dm.deletecradle(room, unpack(ids)))
 	end
 end
 
@@ -639,6 +682,32 @@ function BotIdentity:readdms()
 	for _, value in pairs(dmreqt.room_jids) do
 		self:readcradle(value)
 	end
+end
+
+function BotIdentity:subtodms()
+---@diagnostic disable-next-line: undefined-field
+	local dm_message = self.dm_message or CarrionSSEEvents.dm_message
+	self.dm_message_bkp = dm_message
+	if not dm_message then
+		self.log:warning("unable to register dm reacion, function not found")
+		return
+	end
+
+	self.dm_message = function (s, data)
+		dm_message(self, data)
+
+		self:readdms()
+	end
+
+	self:readdms()
+end
+function BotIdentity:unsubfromdms()
+---@diagnostic disable-next-line: undefined-field
+	if not self.dm_message_bko then
+		return
+	end
+---@diagnostic disable-next-line: undefined-field
+	self.dm_message = self.dm_message_bko
 end
 
 ---@param message string
@@ -677,6 +746,7 @@ function BotIdentity:ensurekeys()
 	if haskey then
 		self.log:info("reading stored private key")
 		self.privatekey = fs.read(keyfile)
+		self.privatekey = self.privatekey:gsub("/n", "")
 	else
 		self.log:info("no saved key found, requesting new keypair")
 		local req_t = self:request(Carrion.Api.keys.genbotpair):getbodytable()
@@ -694,21 +764,45 @@ function BotIdentity:ensurekeys()
 	local rawkey = pubreq and pubreq.public_key or error("error getting public key from http response")
 	self.publickey = parsepkey(rawkey)
 	pkeycache[self.id] = self.publickey
-	tprint(self.publickey)
+	self.log:debugF("public key: %s; private key: %s;", topstring(self.publickey), "secret!"--[[self.privatekey]])
 	self.log:info("keys OK")
 end
 
 ---@param id any
 ---@return boolean
----@return Carrion.PublicKey?
+---@return Carrion.PublicKey
 function BotIdentity:getpeerkey(id)
 	local key = pkeycache[id]---@type Carrion.PublicKey
 	if not key then
 		local keyres = self:request(Carrion.Api.keys.keyfrom(id)):getbodytable()
 		local rkey = keyres and keyres.public_key
 		key = parsepkey(rkey)
+		pkeycache[id] = key
 	end
 	return key ~= nil, key
+end
+
+function BotIdentity:getdmroom(othername, otherid)
+	-- the dm room is the same even with a reversed order, but we only really care about one side
+	--   so this is fine
+	local cache_key = ("%i_%i"):format(self.id, otherid)
+	local room = dmroomcache[cache_key]
+	if not room then
+		local roomres = self:request(
+			Carrion.Api.dm.generateid,
+			Carrion:makehttpcontent {
+				target_character_name	= othername;
+				target_character_id		= otherid;
+			}
+		):getbodytable()
+		if not roomres then
+			self.log:errorF("unable to get dm room for user '%s'", othername)
+			return false, nil
+		end
+		room = roomres.room_jid
+		dmroomcache[cache_key] = room
+	end
+	return room ~= nil, room
 end
 
 function BotIdentity:login()
