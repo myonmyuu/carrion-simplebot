@@ -1,3 +1,14 @@
+local helpers = require "lib.helpers"
+
+local HEADLESS_ARG = "--headless"
+
+HEADLESS = false
+if arg and table.contains(arg, HEADLESS_ARG) then
+	HEADLESS = true
+	table.removeItem(arg, HEADLESS_ARG)
+end
+
+
 function love.conf(t)
     t.identity = "simplebot"			-- The name of the save directory (string)
     t.appendidentity = false            -- Search files in source directory before save directory (boolean)
@@ -34,7 +45,7 @@ function love.conf(t)
     t.modules.data = true               -- Enable the data module (boolean)
     t.modules.event = true              -- Enable the event module (boolean)
     t.modules.font = true               -- Enable the font module (boolean)
-    t.modules.graphics = true           -- Enable the graphics module (boolean)
+    t.modules.graphics = not HEADLESS	-- Enable the graphics module (boolean)
     t.modules.image = true              -- Enable the image module (boolean)
     t.modules.joystick = true           -- Enable the joystick module (boolean)
     t.modules.keyboard = true           -- Enable the keyboard module (boolean)
@@ -47,5 +58,5 @@ function love.conf(t)
     t.modules.timer = true              -- Enable the timer module (boolean), Disabling it will result 0 delta time in love.update
     t.modules.touch = true              -- Enable the touch module (boolean)
     t.modules.video = true              -- Enable the video module (boolean)
-    t.modules.window = true             -- Enable the window module (boolean)
+    t.modules.window = not HEADLESS		-- Enable the window module (boolean)
 end

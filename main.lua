@@ -8,6 +8,9 @@ local messagewidth	= 600
 ---@param m string
 ---@param l LogLevel
 table.insert(Logger.handlers, function (m, l)
+	if HEADLESS then
+		return
+	end
 	local message = love.graphics.newText(love.graphics.getFont())
 	message:setf(m, messagewidth, "left")
 	table.insert(messages, {message, l})
@@ -175,6 +178,9 @@ function Update(dt)
 end
 
 function love.draw()
+	if HEADLESS then
+		return
+	end
 	local y = love.graphics.getHeight() + messagey
 	for i = #messages, 1, -1 do
 		local mes, _l = unpack(messages[i])
