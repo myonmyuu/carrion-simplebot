@@ -97,7 +97,7 @@ local function designatebot(session, chid, chname, botdesc)
 end
 
 function GetToken(name)
-	local filename = fs.parent(BasePath).."/tokens/"..name..".token"
+	local filename = BasePath.."/../tokens/"..name..".token"
 	rootlog:verbose("token path: ", filename)
 	local exists = fs.file_exists(filename)
 	if not exists then
