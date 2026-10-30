@@ -13,7 +13,7 @@ local json		= require "lib.json"
 local fs		= require "lib.fs"
 local socket	= require "socket"
 
-local log = Logger:spec("carrion")
+local carrionlog = Logger:spec("carrion")
 local tprint = helpers.tprint
 local topstring = helpers.topstring
 
@@ -27,6 +27,13 @@ end
 local pkeycache = {}	---@type table<Carrion.CharID, Carrion.PublicKey>
 local modcache = {}		---@type table<string, Carrion.CharID[]>
 local dmroomcache = {}	---@type table<string, string>
+
+---@class CarrionMessage
+---@field sender	channeluser
+---@field message	string
+---@field is_dm		boolean
+---@field room_id	string
+---@field tab_id	string
 
 ---@param channel string
 ---@return Carrion.CharName[]
@@ -302,7 +309,7 @@ do --- SSE Events
 		function CarrionSSEEvents:user_online(data)
 			data.name	= data.character
 			data.id		= data.character_id
-			log:verboseF("user %s (%i) logging in", data.character, data.character_id)
+			carrionlog:verboseF("user %s (%i) logging in", data.character, data.character_id)
 			Carrion.UserIDMap[data.name]	= data.id
 			Carrion.UserIDMapR[data.id]		= data.name
 			Carrion.Users[data.id]			= data --[[@as Carrion.User]]
@@ -310,7 +317,7 @@ do --- SSE Events
 
 		---@param data sse.EventData.user_offline
 		function CarrionSSEEvents:user_offline(data)
-			log:verboseF("user %s (%i) logging out", data.character, data.character_id)
+			carrionlog:verboseF("user %s (%i) logging out", data.character, data.character_id)
 			Carrion.Users[data.character_id] = nil
 			Carrion.UserIDMap[data.character] = nil
 			Carrion.UserIDMapR[data.character_id] = nil
@@ -320,7 +327,7 @@ do --- SSE Events
 		function CarrionSSEEvents:intent_changed(data)
 			local user = Carrion.Users[data.character_id]
 			if not user then
-				log:warningF("got intent update for offline user '%s' (%i)", data.character, data.character_id)
+				carrionlog:warningF("got intent update for offline user '%s' (%i)", data.character, data.character_id)
 				return
 			end
 			user.intent = data.intent
@@ -330,7 +337,7 @@ do --- SSE Events
 		function CarrionSSEEvents:presence_changed(data)
 			local user = Carrion.Users[data.character_id]
 			if not user then
-				log:warningF("got presence update for offline user '%s' (%i)", data.character, data.character_id)
+				carrionlog:warningF("got presence update for offline user '%s' (%i)", data.character, data.character_id)
 				return
 			end
 			user.presence_state = data.presence_state
@@ -538,7 +545,7 @@ function Carrion:request(api, options)
 	options.method = api[2]
 	local rcode, rbody, rheaders = https.request(api[1], options)
 	if rcode ~= 200 then
-		log:warningF(
+		carrionlog:warningF(
 			"received server response for address '%s:%s' (%i): %s",
 			api[1],
 			api[2],
@@ -547,6 +554,54 @@ function Carrion:request(api, options)
 		)
 	end
 	return HttpResponse:new(rcode, rbody, rheaders)
+end
+
+---@param data table
+---@param body string?
+---@return CarrionMessage
+function Carrion:unifychatmessage(data, body)
+	-- carrionlog:verboseF("unifying message: %s", topstring(data))
+	local from, from_id, message,tab_id
+	local room_id = data.room_jid
+	local is_dm = string.match(room_id, "^dm.-") ~= nil
+	local sender
+	if not data then
+		error("tried to unify nil message")
+	elseif is_dm then
+		---@type sse.EventData.dm_message
+---@diagnostic disable-next-line: assign-type-mismatch
+		local dm = data
+		from	= dm.from
+		from_id	= dm.from_id
+		message	= dm.body
+		is_dm	= true
+
+		tab_id	= dm.tab_id
+	elseif data.type == "channel_message" then
+		---@type sse.EventData.channel_message
+---@diagnostic disable-next-line: assign-type-mismatch
+		local chmes = data
+		sender	= chmes.sender
+		message	= chmes.body
+		is_dm	= false
+
+		tab_id	= chmes.tab_id
+	end
+
+	local res = {
+		sender	= sender or {
+			avatar	= "not important";
+			badges	= {};
+			id		= from_id;
+			name	= from;
+		};
+		message	= body or message;
+		is_dm	= is_dm;
+		room_id	= room_id;
+		tab_id	= tab_id;
+	}--[[@as CarrionMessage]]
+	-- carrionlog:verboseF("res: %s", topstring(res))
+	return res
 end
 
 ---@class BotIdentity
@@ -591,7 +646,7 @@ local function gettimems()
 	return math.floor(socket.gettime() * 1000)
 end
 
-function BotIdentity:senddm(message, reply, recipient, id)
+function BotIdentity:senddm(message, reply, recipient, id, tab)
 	local rok, room = self:getdmroom(recipient, id)
 	if not rok then
 		self.log:warningF("unable to send dm to '%s', unable to get room id", tostring(recipient))
@@ -622,6 +677,7 @@ function BotIdentity:senddm(message, reply, recipient, id)
 			room_jid		= room;
 			timestamp		= gettimems();
 			recipient_id	= id;
+			tab_id			= tab;
 			-- message_id		= "should be decided by server?";
 		}---[[@as sse.EventData.dm_message]]
 	)

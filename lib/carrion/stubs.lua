@@ -127,7 +127,7 @@
 ---@field role				ChannelRole?
 ---@field room				string
 
----@class sse.EventData.dm_message : sse.TypedEventData
+---@class sse.EventData.dm_message
 ---@field from				Carrion.CharName
 ---@field from_id			Carrion.CharID
 ---@field message_id		string
