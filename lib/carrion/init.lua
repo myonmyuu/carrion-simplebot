@@ -208,6 +208,7 @@ local Carrion = {
 		characters = {
 			me			= makeendpoint("/characters/me/", "GET");
 			byname		= makeendpointv("/characters/by-name/%s/", "GET");
+			byid		= makeendpointv("/characters/by-id/%s/", "GET");
 			byident		= makeendpointv("/characters/%s/", "GET");
 			bulk		= makeendpoint("/characters/bulk-profiles/", "POST"); --- send along "names": [ "a", "b"[, ...]]
 		};
