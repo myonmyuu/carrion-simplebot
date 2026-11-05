@@ -1,30 +1,6 @@
 ---@class Helpers
 local Helpers = {}
-
-function Helpers.tprint (tbl, height, indent)
-	if not tbl then print("tried to tprint nil value") end
-	if not height then height = 0 end
-	if not indent then indent = 0 end
-	if indent > 10 then
-		return
-	end
-	if type(tbl) ~= "table" then
-		print(tostring(tbl))
-		return
-	end
-	for k, v in pairs(tbl) do
-		height = height+1
-		local formatting = string.rep("  ", indent) .. tostring(k) .. ": "
-		if type(v) == "table" then
-			print(formatting, indent*8, 16*height)
-			Helpers.tprint(v, height+1, indent+1)
-		elseif type(v) == 'function' then
-			print(formatting .. "function", indent*8, 16*height)
-		else
-			print(formatting .. tostring(v), indent*8, 16*height)
-		end
-	end
-end
+table.unpack = unpack
 
 function Helpers.topstring(tbl, height, indent)
 	if not tbl then return "nil" end
@@ -56,6 +32,9 @@ function Helpers.topstring(tbl, height, indent)
 	ret = ("%s%s}"):format(ret, string.rep("\t", math.max(0, indent - 1)))
 	return ret
 end
+function Helpers.tprint (tbl)
+	print(Helpers.topstring(tbl))
+end
 
 function Helpers.make_cookies(table)
 	table = table or {}
@@ -64,6 +43,28 @@ function Helpers.make_cookies(table)
 		res = ("%s%s=%s;"):format(res, tostring(key), tostring(value))
 	end
 	return res
+end
+
+---@param x number
+---@param y number
+---@param alpha number
+---@return number
+function math.lerp(x, y, alpha)
+    if x == y then return x end
+    if alpha == 0 then return x end
+    if alpha == 1 then return y end
+
+    return x + (y - x) * alpha
+end
+
+---@param min integer
+---@param max integer
+---@param n integer
+---@return integer
+function math.wrap(min, max, n)
+	n = n - min
+	n = n % (max - min + 1)
+	return n + min
 end
 
 ---@generic V
@@ -83,6 +84,68 @@ function table.map(t, f)
 	return res
 end
 
+---@generic Key
+---@generic Val
+---@generic RKey
+---@generic RVal
+---@param t table<Key,Val>
+---@param f fun(k: Key, v: Val): RKey, RVal
+---@return { [RKey]: RVal }
+function table.mapk(t, f)
+	local res = {}
+	for key, value in pairs(t) do
+		local k, v = f(key, value)
+		if k ~= nil then
+			res[k] = v
+		end
+	end
+	return res
+end
+
+---@generic V
+---@generic R
+---@generic K
+---@param t table<`K`,`V`>
+---@param f fun(k: K, v: V): boolean
+---@return boolean
+function table.any(t, f)
+	for key, value in pairs(t) do
+		local r = f(key, value)
+		if r then
+			return true
+		end
+	end
+	return false
+end
+
+---@generic K
+---@generic V
+---@param t table<`K`,`V`>
+---@param wf? fun(v:V):number
+---@return K
+function table.weightedrandom(t, wf)
+	local totalWeight = 0
+
+    for _, item in pairs(t) do
+        totalWeight = totalWeight + (wf and wf(item)) or item.weight
+    end
+
+    local roll = math.random() * totalWeight
+
+    for name, item in pairs(t) do
+        roll = roll - (wf and wf(item)) or item.weight
+
+        if roll <= 0 then
+            return name
+        end
+    end
+	return nil
+end
+
+---comment
+---@param col any
+---@param item any
+---@return boolean
 function table.contains(col, item)
 	return table.getIndex(col, item) ~= 0
 end

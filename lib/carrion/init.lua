@@ -14,6 +14,7 @@ local fs		= require "lib.fs"
 local socket	= require "socket"
 
 local carrionlog = Logger:spec("carrion")
+carrionlog.level = Logger.levels.debug
 local tprint = helpers.tprint
 local topstring = helpers.topstring
 
@@ -202,6 +203,7 @@ local Carrion = {
 		heartbeat	= event:new();
 		shutdown	= event:new();
 		cmd			= event:new();
+		userjoined	= event:new();
 	};
 	Url	= "https://carrion.chat";
 	Api	= {
@@ -241,6 +243,7 @@ local Carrion = {
 			directory	= makeendpoint("/channels/directory", "GET");
 			send		= makeendpointv("/channels/%s/send/", "POST");
 			gettabs		= makeendpointv("/channels/tabs/%s", "GET");
+			deletemesgs	= makeendpointv("/channels/%s/delete-messages/", "POST")
 		};
 		dm = {
 			pendingrooms= makeendpoint("/dm/my-pending-rooms/", "GET");
@@ -261,6 +264,18 @@ local Carrion = {
 	};
 }
 
+---@param user carrionuser
+---@param room string
+---@param role ChannelRole?
+function Carrion:userjoinedroom(user, room, role)
+	Carrion.Events.userjoined(room, user, role)
+	if role == "mod" or role == "owner" then
+		local mods = ensurechannelmods(room)
+		if not table.contains(mods, user.id) then
+			table.insert(mods, user.id)
+		end
+	end
+end
 
 do --- SSE Events
 	function CarrionSSEEvents:fallback(data, raw)
@@ -357,30 +372,18 @@ do --- SSE Events
 
 		---@param data sse.EventData.profile_updated
 		function CarrionSSEEvents:profile_updated(data)
-			debugprintevent(self, data)
+			-- debugprintevent(self, data)
 		end
 	end
 
 	do --- Rooms
 		---@param data sse.EventData.user_joined_room
 		function CarrionSSEEvents:user_joined_room(data)
-			self.log:info("joined;", topstring(data))
-			if data.role then
-				self:sawmod(data)
-				local mods = ensurechannelmods(data.room)
----@diagnostic disable-next-line: undefined-field
-				if self.request then
-					local id = Carrion:getuserid(data.character, self--[[@as BotIdentity]])
-					if not table.contains(mods, id) then
-					table.insert(mods, id)
-				end
-				end
-			end
-		end
-
-		---@param data sse.EventData.user_joined_room
-		function CarrionSSEEvents:sawmod(data)
-			self.log:verbose("saw mod fallback")
+			-- self.log:info("joined;", topstring(data))
+			Carrion:userjoinedroom({
+				name	= data.character;
+				id		= Carrion:getuserid(data.character, self--[[@as BotIdentity]])
+			}, data.room, data.role)
 		end
 
 		function CarrionSSEEvents:user_left_room(data)
@@ -424,6 +427,10 @@ do --- SSE Events
 
 		function CarrionSSEEvents:mod_invite(data)
 			debugprintevent(self, data)
+		end
+
+		function CarrionSSEEvents:user_modded(data)
+			
 		end
 
 		function CarrionSSEEvents:mod_accepted(data)
@@ -484,15 +491,28 @@ function Carrion:filluserlist(data)
 end
 
 ---@param name Carrion.CharName
----@param bot BotIdentity
+---@param bot BotIdentity?
 ---@return Carrion.CharID
 function Carrion:getuserid(name, bot)
 	local cacheres = self.UserIDMap[name]
-	if cacheres then
-		return cacheres
+	if not cacheres then
+		local chreqt
+		if bot then
+			chreqt = bot:request(self.Api.characters.byname(name)):getbodytable()
+		else
+			chreqt = Carrion:request(
+				self.Api.characters.byname(name),
+				{
+---@diagnostic disable-next-line: param-type-mismatch
+					headers = Carrion:makeheaders(Carrion:makeusercookies(nil))
+				}
+			):getbodytable()
+		end
+		cacheres = chreqt and chreqt.id or error(("unable to get id for user '%s'"):format(name))
+		-- TODO: cache this as well
 	end
-	local chreqt = bot:request(self.Api.characters.byname(name)):getbodytable()
-	return chreqt and chreqt.id or error(("unable to get id for user '%s'"):format(name))
+	
+	return cacheres
 end
 
 ---@param sessionid string
@@ -643,10 +663,15 @@ function BotIdentity:create(name, token, carrion, o)
 	})
 end
 
-local function gettimems()
+function Carrion:gettimems()
 	return math.floor(socket.gettime() * 1000)
 end
 
+---@param message string
+---@param reply any
+---@param recipient Carrion.CharName
+---@param id Carrion.CharID
+---@param tab string?
 function BotIdentity:senddm(message, reply, recipient, id, tab)
 	local rok, room = self:getdmroom(recipient, id)
 	if not rok then
@@ -676,7 +701,7 @@ function BotIdentity:senddm(message, reply, recipient, id, tab)
 		Carrion:makehttpcontent {
 			body			= encrypted_message;
 			room_jid		= room;
-			timestamp		= gettimems();
+			timestamp		= Carrion:gettimems();
 			recipient_id	= id;
 			tab_id			= tab;
 			-- message_id		= "should be decided by server?";
@@ -911,6 +936,10 @@ function BotIdentity:login()
 	end)
 	Carrion.Events.heartbeat:register(self.sse, function (...) self:heartbeat(...) end)
 	Carrion.Events.shutdown:register(self.sse, function (...) self:_shutdown_int(...) end)
+	Carrion.Events.userjoined:register(self.sse, function (...) self:userjoined(...) end)
+	Carrion.Events.cmd:register(self.sse, function (cmd)
+		
+	end)
 
 	self:ensurekeys()
 	self:postlogin()
@@ -926,6 +955,8 @@ function BotIdentity:unregister()
 	Carrion.Events.update:unregister(self.sse)
 	Carrion.Events.heartbeat:unregister(self.sse)
 	Carrion.Events.shutdown:unregister(self.sse)
+	Carrion.Events.userjoined:unregister(self.sse)
+	Carrion.Events.cmd:unregister(self.sse)
 	if self.sse.thread and self.sse.thread:isRunning() then
 		love.thread.getChannel(getssechannel(self.name).."k"):push(true)
 		self.sse.thread:wait()
@@ -955,6 +986,12 @@ do --- Event
 	end
 
 	function BotIdentity:shutdown(...)
+	end
+
+	---@param room string
+	---@param user carrionuser
+	---@param role ChannelRole
+	function BotIdentity:userjoined(room, user, role)
 	end
 end
 

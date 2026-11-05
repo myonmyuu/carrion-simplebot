@@ -15,28 +15,30 @@ local function makeLevel(name, l, clr)
     }
 end
 
+local levels = {
+	off = makeLevel("off", 0),
+	verbose = makeLevel("verbose", 5, {139, 139, 139}),
+	debug = makeLevel("debug", 10, {240, 240, 240}),
+	info = makeLevel("info", 15, {178, 235, 242}),
+	warning = makeLevel("warn", 20, {255, 236, 179}),
+	error = makeLevel("err", 25, {255, 138, 101}),
+}
+
 ---@class Logger
 local log = {
-    levels = {
-        off = makeLevel("off", 0),
-        verbose = makeLevel("verbose", 5, {139, 139, 139}),
-        debug = makeLevel("debug", 10, {240, 240, 240}),
-        info = makeLevel("info", 15, {178, 235, 242}),
-        warning = makeLevel("warn", 20, {255, 236, 179}),
-        error = makeLevel("err", 25, {255, 138, 101}),
-    },
-    handlers = {} ---@type fun(mes:string, l:LogLevel)[]
+    levels		= levels;
+    handlers	= {}; ---@type fun(mes:string, l:LogLevel)[]
+	level		= levels.verbose;
 }
 table.insert(log.handlers, function(mes, l)
     print(mes)
 end)
-log.level = log.levels.verbose
 
 ---@param l LogLevel
 ---@param s string
 ---@param ... any
 function log:log(l, s, ...)
-	if self.level == log.levels.off or l.level < self.level.level then
+	if (self.level.level == 0) or l.level < self.level.level then
 		return
 	end
     local arg = {...}
@@ -85,19 +87,19 @@ local SpecLogger = setmetatable({
 	end
 })
 
-function SpecLogger:debug(l, ...) 		Logger:debug(self.sawmill, l, ...) end
-function SpecLogger:error(l, ...) 		Logger:error(self.sawmill, l, ...) end
-function SpecLogger:fatal(l, ...) 		Logger:fatal(self.sawmill, l, ...) end
-function SpecLogger:info(l, ...) 		Logger:info(self.sawmill, l, ...) end
-function SpecLogger:verbose(l, ...) 	Logger:verbose(self.sawmill, l, ...) end
-function SpecLogger:warning(l, ...) 	Logger:warning(self.sawmill, l, ...) end
+function SpecLogger:debug(l, ...) 		Logger.debug(self, self.sawmill, l, ...) end
+function SpecLogger:error(l, ...) 		Logger.error(self, self.sawmill, l, ...) end
+function SpecLogger:fatal(l, ...) 		Logger.fatal(self, self.sawmill, l, ...) end
+function SpecLogger:info(l, ...) 		Logger.info(self, self.sawmill, l, ...) end
+function SpecLogger:verbose(l, ...) 	Logger.verbose(self, self.sawmill, l, ...) end
+function SpecLogger:warning(l, ...) 	Logger.warning(self, self.sawmill, l, ...) end
 
-function SpecLogger:debugF(l, ...) 		Logger:debug(self.sawmill, string.format( l, ...)) end
-function SpecLogger:errorF(l, ...) 		Logger:error(self.sawmill, string.format( l, ...)) end
-function SpecLogger:fatalF(l, ...) 		Logger:fatal(self.sawmill, string.format( l, ...)) end
-function SpecLogger:infoF(l, ...) 		Logger:info(self.sawmill, string.format( l, ...)) end
-function SpecLogger:verboseF(l, ...) 	Logger:verbose(self.sawmill, string.format( l, ...)) end
-function SpecLogger:warningF(l, ...) 	Logger:warning(self.sawmill, string.format( l, ...)) end
+function SpecLogger:debugF(l, ...) 		Logger.debug(self, self.sawmill, string.format( l, ...)) end
+function SpecLogger:errorF(l, ...) 		Logger.error(self, self.sawmill, string.format( l, ...)) end
+function SpecLogger:fatalF(l, ...) 		Logger.fatal(self, self.sawmill, string.format( l, ...)) end
+function SpecLogger:infoF(l, ...) 		Logger.info(self, self.sawmill, string.format( l, ...)) end
+function SpecLogger:verboseF(l, ...) 	Logger.verbose(self, self.sawmill, string.format( l, ...)) end
+function SpecLogger:warningF(l, ...) 	Logger.warning(self, self.sawmill, string.format( l, ...)) end
 
 ---@param o SpecLogger
 ---@return SpecLogger
@@ -105,8 +107,11 @@ function SpecLogger:create(o)
 	return setmetatable(o or {}, { __index = self })
 end
 
-function log:spec(s)
-	return SpecLogger:create({ sawmill = s })
+function log:spec(s, l)
+	return SpecLogger:create{
+		sawmill	= s;
+		level	= l or log.levels.verbose;
+	}
 end
 
 log.SpecLogger = SpecLogger

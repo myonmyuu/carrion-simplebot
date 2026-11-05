@@ -56,7 +56,7 @@ function string.nonempty(s)
  ---
  --- @tparam string str
  --- @tparam[opt] string sep defaults to "\n"
- --- @treturn {string}
+ ---@return string[]
  function string.split(str,sep)
 	sep = sep or "\n"
 	local ret={}

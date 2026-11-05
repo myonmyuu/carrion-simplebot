@@ -62,6 +62,7 @@
 ---@alias ChannelRole : string
 ---|"mod"
 ---|"owner"
+---|"participant"
 
 ---@class sse.EventData
 
@@ -71,9 +72,11 @@
 ---@class sse.TimedEventData : sse.EventData
 ---@field timestamp string
 
----@class channeluser
----@field id		integer
----@field name		string
+---@class carrionuser
+---@field id		Carrion.CharID
+---@field name		Carrion.CharName
+
+---@class channeluser : carrionuser
 ---@field badges	string[]
 ---@field avatar	string
 
